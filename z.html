@@ -1,0 +1,1294 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StreamTrack Pro - Master Edition</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['Inter', 'sans-serif'] },
+                    colors: {
+                        brand: { 50: '#eff6ff', 100: '#dbeafe', 500: '#3b82f6', 600: '#2563eb', 700: '#1d4ed8', 800: '#1e40af', 900: '#1e3a8a' }
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .fade-in { animation: fadeIn 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
+        .slide-up { animation: slideUp 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        
+        /* Scrollbar Personalizado */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        
+        .card-hover:hover { transform: translateY(-2px); box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); }
+    </style>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged, signOut, updateProfile, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, doc, getDoc, setDoc, updateDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- CONFIGURACIÓN ---
+        const firebaseConfig = {
+          apiKey: "AIzaSyDXkOSPYx-xIuiow3CKkzgIT5QjxTZDb2w",
+          authDomain: "seguimiento-8c7c1.firebaseapp.com",
+          projectId: "seguimiento-8c7c1",
+          storageBucket: "seguimiento-8c7c1.firebasestorage.app",
+          messagingSenderId: "487060989806",
+          appId: "1:487060989806:web:a6db2455bcfbe845c4837f",
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = "SeguimientoStreamEvolution";
+        const LEADER_EMAIL = 'mrandroidtutorialeshd@gmail.com';
+        
+        let currentUser = null;
+        let isLeader = false;
+        let globalConfig = { inviteCode: '...', inviteActive: false };
+        let salesCache = []; 
+        let currentAdminData = null; 
+
+        // --- AUTH LOGIC ---
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                const userRef = doc(db, `artifacts/${appId}/public_users`, user.uid);
+                
+                onSnapshot(userRef, (snap) => {
+                    if (snap.exists()) {
+                        currentAdminData = snap.data();
+                        
+                        // 1. Verificar Bloqueo
+                        if (currentAdminData.isActive === false && user.email !== LEADER_EMAIL) {
+                            signOut(auth);
+                            showToast("Cuenta bloqueada por administración.", "error");
+                            return;
+                        }
+
+                        // 2. Verificar Vencimiento
+                        if (user.email !== LEADER_EMAIL && currentAdminData.subscriptionEnd) {
+                            const now = new Date();
+                            const end = new Date(currentAdminData.subscriptionEnd);
+                            
+                            if (now > end) {
+                                document.getElementById('auth-container').classList.add('hidden');
+                                document.getElementById('app-container').classList.add('hidden');
+                                document.getElementById('expired-container').classList.remove('hidden'); 
+                                return;
+                            }
+
+                            const diff = Math.ceil((end - now) / (1000 * 60 * 60 * 24));
+                            document.getElementById('daysRemainingDisplay').innerText = diff + " Días";
+                        } else {
+                            document.getElementById('daysRemainingDisplay').innerText = "∞";
+                        }
+                        
+                        updateNotificationBadge();
+                    }
+                });
+
+                currentUser = user;
+                isLeader = (user.email === LEADER_EMAIL);
+                
+                document.getElementById('userNameDisplay').innerText = user.displayName || 'Admin';
+                document.getElementById('userRoleDisplay').innerText = isLeader ? 'Líder Supremo' : 'Administrador';
+                
+                document.getElementById('auth-container').classList.add('hidden');
+                document.getElementById('expired-container').classList.add('hidden');
+                document.getElementById('app-container').classList.remove('hidden');
+                showView('view-dashboard');
+
+                document.getElementById('leaderMenu').classList.toggle('hidden', !isLeader);
+                
+                if(isLeader) initLeaderListeners();
+                initDataListeners();
+            } else {
+                currentUser = null;
+                isLeader = false;
+                document.getElementById('auth-container').classList.remove('hidden');
+                document.getElementById('app-container').classList.add('hidden');
+                document.getElementById('expired-container').classList.add('hidden');
+                showView('auth-login');
+            }
+        });
+
+        // --- AUTH HANDLERS ---
+        window.handleLogin = async (e) => {
+            e.preventDefault();
+            const btn = e.target.querySelector('button');
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Entrando...';
+            btn.disabled = true;
+
+            try {
+                await signInWithEmailAndPassword(auth, document.getElementById('loginEmail').value, document.getElementById('loginPass').value);
+            } catch (error) {
+                showToast("Credenciales incorrectas", "error");
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+            }
+        }
+
+        window.handleRegister = async (e) => {
+            e.preventDefault();
+            const btn = e.target.querySelector('button');
+            btn.disabled = true;
+
+            try {
+                const email = document.getElementById('regEmail').value;
+                const code = document.getElementById('regCode').value;
+                let subEnd = null;
+
+                if (email !== LEADER_EMAIL) {
+                    const configSnap = await getDoc(doc(db, `artifacts/${appId}/app_data`, 'config'));
+                    if (!configSnap.exists()) throw new Error("Sistema no configurado.");
+                    
+                    const config = configSnap.data();
+                    if (!config.inviteActive) throw new Error("El registro está desactivado.");
+                    if (config.inviteCode !== code) throw new Error("Código inválido.");
+
+                    const months = config.codeDuration || 1; 
+                    const endDate = new Date();
+                    endDate.setMonth(endDate.getMonth() + parseInt(months));
+                    subEnd = endDate.toISOString();
+                }
+
+                const cred = await createUserWithEmailAndPassword(auth, email, document.getElementById('regPass').value);
+                await updateProfile(cred.user, { displayName: document.getElementById('regName').value });
+                
+                await setDoc(doc(db, `artifacts/${appId}/public_users`, cred.user.uid), {
+                    email: email,
+                    name: document.getElementById('regName').value,
+                    role: email === LEADER_EMAIL ? 'leader' : 'admin',
+                    isActive: true,
+                    subscriptionEnd: subEnd,
+                    joinedAt: new Date().toISOString()
+                });
+                showToast("¡Cuenta creada con éxito!");
+            } catch (error) {
+                showToast(error.message, "error");
+                btn.disabled = false;
+            }
+        }
+
+        window.doLogout = async () => {
+            await signOut(auth);
+            location.reload();
+        }
+
+        // --- DATA LISTENERS ---
+        function initDataListeners() {
+            const uid = currentUser.uid;
+            
+            // CLIENTES
+            onSnapshot(collection(db, `artifacts/${appId}/users/${uid}/clients`), (snap) => {
+                const list = document.getElementById('clientsList');
+                const select = document.getElementById('saleClient');
+                list.innerHTML = '';
+                select.innerHTML = '<option value="">Seleccionar Cliente</option>';
+                
+                if(snap.empty) {
+                    list.innerHTML = emptyState("No tienes clientes registrados aún.");
+                }
+
+                snap.forEach(doc => {
+                    const d = doc.data();
+                    select.innerHTML += `<option value="${doc.id}">${d.name}</option>`;
+                    list.innerHTML += `
+                        <div class="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 flex justify-between items-center group card-hover transition-all duration-300">
+                            <div class="flex items-center gap-4">
+                                <div class="w-12 h-12 bg-brand-50 text-brand-600 rounded-full flex items-center justify-center font-bold text-xl shadow-inner">${d.name.charAt(0)}</div>
+                                <div>
+                                    <h4 class="font-bold text-gray-800 text-lg leading-tight">${d.name}</h4>
+                                    <a href="https://wa.me/${d.phone}" target="_blank" class="text-sm text-green-600 hover:text-green-700 font-medium flex items-center gap-1 mt-1">
+                                        <i class="fa-brands fa-whatsapp"></i> ${d.phone}
+                                    </a>
+                                </div>
+                            </div>
+                            <button onclick="deleteItem('clients', '${doc.id}')" class="w-8 h-8 rounded-full flex items-center justify-center text-gray-300 hover:bg-red-50 hover:text-red-500 transition-colors">
+                                <i class="fa-solid fa-trash-can"></i>
+                            </button>
+                        </div>`;
+                });
+                document.getElementById('statClients').innerText = snap.size;
+            });
+
+            // PLATAFORMAS
+            onSnapshot(collection(db, `artifacts/${appId}/users/${uid}/platforms`), (snap) => {
+                const list = document.getElementById('platformsList');
+                const select = document.getElementById('salePlatform');
+                list.innerHTML = '';
+                select.innerHTML = '<option value="">Seleccionar Plataforma</option>';
+
+                if(snap.empty) {
+                    list.innerHTML = emptyState("No has agregado plataformas.");
+                }
+
+                snap.forEach(doc => {
+                    const d = doc.data();
+                    select.innerHTML += `<option value="${doc.id}" data-price="${d.price}">${d.name} ($${d.price})</option>`;
+                    
+                    const imgHtml = d.image 
+                        ? `<img src="${d.image}" class="w-full h-full object-contain p-2 hover:scale-105 transition-transform duration-300">` 
+                        : `<i class="fa-solid fa-gamepad text-5xl text-gray-200"></i>`;
+                        
+                    list.innerHTML += `
+                        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden group card-hover flex flex-col h-full">
+                            <div class="h-40 bg-white relative flex items-center justify-center border-b border-gray-50">
+                                ${imgHtml}
+                                <button onclick="deleteItem('platforms', '${doc.id}')" class="absolute top-2 right-2 bg-white/90 p-2 rounded-full text-red-500 shadow-sm opacity-0 group-hover:opacity-100 transition-all hover:bg-red-50">
+                                    <i class="fa-solid fa-trash-can"></i>
+                                </button>
+                            </div>
+                            <div class="p-5 flex-1 flex flex-col justify-between">
+                                <h4 class="font-bold text-gray-800 text-lg mb-1">${d.name}</h4>
+                                <div class="flex items-center justify-between">
+                                    <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Precio</span>
+                                    <p class="text-xl font-bold text-brand-600">$${d.price}</p>
+                                </div>
+                            </div>
+                        </div>`;
+                });
+            });
+
+            // VENTAS
+            onSnapshot(collection(db, `artifacts/${appId}/users/${uid}/sales`), (snap) => {
+                salesCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
+                applySalesFilter(); 
+                renderSalesTable(salesCache);
+                updateNotificationBadge();
+            });
+        }
+
+        // --- SISTEMA DE NOTIFICACIONES ---
+        window.updateNotificationBadge = () => {
+            const badge = document.getElementById('notifBadge');
+            let count = 0;
+            const now = new Date();
+
+            if(currentAdminData && currentAdminData.subscriptionEnd && currentUser.email !== LEADER_EMAIL) {
+                const end = new Date(currentAdminData.subscriptionEnd);
+                const diff = Math.ceil((end - now) / (86400000));
+                if(diff <= 5) count++;
+            }
+
+            salesCache.forEach(s => {
+                const end = new Date(s.end);
+                const diff = Math.ceil((end - now) / (86400000));
+                if(diff <= 5) count++;
+            });
+
+            if(count > 0) {
+                badge.classList.remove('hidden');
+                badge.innerText = count > 9 ? '9+' : count;
+            } else {
+                badge.classList.add('hidden');
+            }
+        }
+
+        window.openNotifications = async () => {
+            const container = document.getElementById('notifContainer');
+            container.innerHTML = '<div class="text-center py-4"><i class="fa-solid fa-circle-notch fa-spin text-brand-600"></i></div>';
+            openModal('notificationModal');
+
+            let html = '';
+            const now = new Date();
+            let hasNotifications = false;
+
+            if(currentAdminData && currentAdminData.subscriptionEnd && currentUser.email !== LEADER_EMAIL) {
+                const end = new Date(currentAdminData.subscriptionEnd);
+                const diff = Math.ceil((end - now) / (86400000));
+                
+                if(diff <= 5) {
+                    hasNotifications = true;
+                    html += `
+                    <div class="bg-red-50 border-l-4 border-red-500 p-4 rounded-r-lg mb-4 shadow-sm">
+                        <div class="flex items-start">
+                            <div class="flex-shrink-0 text-red-500"><i class="fa-solid fa-triangle-exclamation"></i></div>
+                            <div class="ml-3 w-full">
+                                <h3 class="text-sm font-bold text-red-800">¡Tu Membresía Expira Pronto!</h3>
+                                <p class="text-xs text-red-700 mt-1">Te quedan solo <span class="font-bold">${diff} días</span>. Renueva para no perder acceso.</p>
+                                <p class="text-[10px] text-red-400 mt-2 text-right uppercase font-bold tracking-wider">Contactar al Líder</p>
+                            </div>
+                        </div>
+                    </div>`;
+                }
+            }
+
+            const expiringSales = salesCache.filter(s => {
+                const diff = Math.ceil((new Date(s.end) - now) / (86400000));
+                return diff <= 5;
+            });
+            expiringSales.sort((a,b) => new Date(a.end) - new Date(b.end));
+
+            for(let s of expiringSales) {
+                hasNotifications = true;
+                const diff = Math.ceil((new Date(s.end) - now) / (86400000));
+                let clientName = "Cliente";
+                let platName = "Servicio";
+
+                try {
+                    const cSnap = await getDoc(doc(db, `artifacts/${appId}/users/${currentUser.uid}/clients`, s.clientId));
+                    const pSnap = await getDoc(doc(db, `artifacts/${appId}/users/${currentUser.uid}/platforms`, s.platformId));
+                    if(cSnap.exists()) clientName = cSnap.data().name;
+                    if(pSnap.exists()) platName = pSnap.data().name;
+                } catch(e){}
+
+                const isExpired = diff < 0;
+                html += `
+                <div class="flex items-center justify-between p-3 bg-white border border-gray-100 rounded-lg mb-2 shadow-sm hover:bg-gray-50 transition-colors">
+                    <div class="flex items-center gap-3">
+                        <div class="w-2 h-2 rounded-full ${isExpired ? 'bg-red-500' : 'bg-orange-400'}"></div>
+                        <div>
+                            <p class="text-sm font-bold text-gray-800">${clientName}</p>
+                            <p class="text-xs text-gray-500">${platName}</p>
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <span class="inline-block px-2 py-0.5 rounded text-[10px] font-bold ${isExpired ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}">
+                            ${isExpired ? 'Vencido' : diff + ' días'}
+                        </span>
+                    </div>
+                </div>`;
+            }
+
+            if(!hasNotifications) {
+                html = `
+                <div class="text-center py-8 text-gray-400">
+                    <i class="fa-regular fa-bell-slash text-3xl mb-2"></i>
+                    <p class="text-sm">Todo está en orden.</p>
+                </div>`;
+            }
+            container.innerHTML = html;
+        }
+
+        // --- BUSCADOR DE VENTAS ---
+        window.applySalesFilter = () => {
+            const query = document.getElementById('salesSearchInput').value.toLowerCase();
+            const list = document.getElementById('salesList');
+            
+            if (salesCache.length === 0) {
+                list.innerHTML = emptyState("No hay ventas registradas.");
+                document.getElementById('statRevenue').innerText = "$0.00";
+                document.getElementById('statServices').innerText = "0";
+                return;
+            }
+
+            const filtered = salesCache.filter(s => 
+                (s.email && s.email.toLowerCase().includes(query)) || 
+                (s.profile && s.profile.toLowerCase().includes(query))
+            );
+
+            if (filtered.length === 0) {
+                list.innerHTML = emptyState(`No se encontró "${query}"`);
+                return;
+            }
+
+            renderSales(filtered);
+        }
+
+        function getStatusData(daysLeft) {
+            if (daysLeft < 0) return { class: "bg-red-100 text-red-800", dot: "bg-red-600", text: "Vencido" };
+            else if (daysLeft <= 5) return { class: "bg-red-100 text-red-800", dot: "bg-red-600", text: `Activo (${daysLeft}d)` };
+            else if (daysLeft <= 15) return { class: "bg-yellow-100 text-yellow-800", dot: "bg-yellow-600", text: `Activo (${daysLeft}d)` };
+            else return { class: "bg-green-100 text-green-800", dot: "bg-green-600", text: `Activo (${daysLeft}d)` };
+        }
+
+        async function renderSales(sales) {
+            const list = document.getElementById('salesList');
+            list.innerHTML = '';
+            let total = 0, active = 0;
+            const now = new Date();
+
+            sales.sort((a,b) => new Date(b.end) - new Date(a.end));
+
+            for (let s of sales) {
+                const cSnap = await getDoc(doc(db, `artifacts/${appId}/users/${currentUser.uid}/clients`, s.clientId));
+                const pSnap = await getDoc(doc(db, `artifacts/${appId}/users/${currentUser.uid}/platforms`, s.platformId));
+                
+                if(!cSnap.exists() || !pSnap.exists()) continue;
+                const c = cSnap.data(), p = pSnap.data();
+                
+                total += parseFloat(s.price || 0);
+                const daysLeft = Math.ceil((new Date(s.end) - now) / (86400000));
+                if(daysLeft >= 0) active++;
+
+                const msg = daysLeft < 0 ? `Hola ${c.name}, tu servicio de ${p.name} venció.` : `Hola ${c.name}, servicio activo.`;
+                const status = getStatusData(daysLeft);
+                const statusHtml = `<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${status.class}"><span class="w-1.5 h-1.5 mr-1.5 rounded-full ${status.dot}"></span> ${status.text}</span>`;
+
+                list.innerHTML += `
+                    <div class="bg-white rounded-xl p-4 border ${daysLeft < 0 ? 'border-red-100 bg-red-50/30' : 'border-gray-100'} shadow-sm flex flex-col md:flex-row items-center justify-between gap-4 card-hover">
+                        <div class="flex items-center gap-4 w-full">
+                            <div class="w-14 h-14 bg-white rounded-lg shadow-sm border border-gray-100 p-1 flex items-center justify-center overflow-hidden shrink-0">
+                                ${p.image ? `<img src="${p.image}" class="w-full h-full object-contain">` : `<i class="fa-solid fa-ticket text-gray-300"></i>`}
+                            </div>
+                            <div class="min-w-0">
+                                <h4 class="font-bold text-gray-900 truncate">${p.name} <span class="text-gray-300 mx-1">|</span> ${c.name}</h4>
+                                <div class="flex items-center gap-3 mt-1.5">
+                                    ${statusHtml}
+                                    <span class="text-xs text-gray-500 font-medium">Fin: ${s.end}</span>
+                                </div>
+                                ${s.email ? `<p class="text-xs text-gray-400 mt-2 truncate font-mono bg-gray-50 p-1 rounded border border-gray-100"><i class="fa-solid fa-envelope mr-1"></i> ${s.email}</p>` : ''}
+                            </div>
+                        </div>
+                        <div class="flex gap-2 self-end md:self-center shrink-0">
+                             <a href="https://wa.me/${c.phone}?text=${encodeURIComponent(msg)}" target="_blank" class="w-9 h-9 flex items-center justify-center bg-green-100 text-green-600 rounded-lg hover:bg-green-600 hover:text-white transition-all"><i class="fa-brands fa-whatsapp"></i></a>
+                             <button onclick="deleteItem('sales', '${s.id}')" class="w-9 h-9 flex items-center justify-center bg-gray-100 text-gray-400 rounded-lg hover:bg-red-100 hover:text-red-500 transition-all"><i class="fa-solid fa-trash-can"></i></button>
+                        </div>
+                    </div>`;
+            }
+            
+            if(document.getElementById('salesSearchInput').value === '') {
+                document.getElementById('statRevenue').innerText = `$${total.toFixed(2)}`;
+                document.getElementById('statServices').innerText = active;
+            }
+        }
+
+        // --- RENDERIZADO DE TABLA (MODIFICADO) ---
+        async function renderSalesTable(sales) {
+            const tbody = document.getElementById('salesTableBody');
+            tbody.innerHTML = '';
+            
+            // Si la lista de ventas inicial está vacía
+            if(sales.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="7" class="p-4 text-center text-gray-400">No hay datos para mostrar</td></tr>`;
+                return;
+            }
+
+            sales.sort((a,b) => new Date(b.end) - new Date(a.end));
+            const now = new Date();
+            let visibleRows = 0; // Contador de filas visibles
+
+            for (let s of sales) {
+                // 1. FILTRO DE CADUCIDAD: Si venció, ignorar
+                const daysLeft = Math.ceil((new Date(s.end) - now) / (86400000));
+                if (daysLeft < 0) continue; 
+
+                // 2. OBTENCIÓN DE DATOS
+                const cSnap = await getDoc(doc(db, `artifacts/${appId}/users/${currentUser.uid}/clients`, s.clientId));
+                const pSnap = await getDoc(doc(db, `artifacts/${appId}/users/${currentUser.uid}/platforms`, s.platformId));
+                
+                // 3. FILTRO DE INTEGRIDAD: Si cliente o plataforma no existen, ignorar
+                if(!cSnap.exists() || !pSnap.exists()) continue;
+
+                // Si pasa los filtros, renderizar
+                visibleRows++;
+                const c = cSnap.data();
+                const p = pSnap.data();
+
+                const status = getStatusData(daysLeft);
+                const statusBadge = `<span class="${status.class.replace('text-', 'text-')} text-xs font-medium px-2.5 py-0.5 rounded">${status.text}</span>`;
+
+                tbody.innerHTML += `
+                    <tr class="bg-white border-b hover:bg-gray-50 transition-colors">
+                        <td class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap">${c.name}</td>
+                        <td class="px-6 py-4">${p.name}</td>
+                        <td class="px-6 py-4">
+                            <div class="flex flex-col gap-1">
+                                <span class="text-xs text-gray-500"><strong>U:</strong> ${s.email || '-'}</span>
+                                <span class="text-xs text-gray-500"><strong>P:</strong> ${s.password || '-'}</span>
+                                <div class="flex gap-2 mt-1">
+                                    <span class="text-[10px] bg-gray-100 px-1 rounded border">Prf: ${s.profile || '-'}</span>
+                                    <span class="text-[10px] bg-gray-100 px-1 rounded border">Pin: ${s.pin || '-'}</span>
+                                </div>
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">${s.start}</td>
+                        <td class="px-6 py-4 whitespace-nowrap">${s.end}</td>
+                        <td class="px-6 py-4">${statusBadge}</td>
+                        <td class="px-6 py-4 text-right font-bold text-brand-600">$${s.price}</td>
+                    </tr>
+                `;
+            }
+
+            // Si después de filtrar no queda nada
+            if (visibleRows === 0) {
+                tbody.innerHTML = `<tr><td colspan="7" class="p-8 text-center text-gray-400 flex flex-col items-center justify-center w-full"><i class="fa-regular fa-folder-open text-2xl mb-2"></i>No hay ventas activas</td></tr>`;
+            }
+        }
+
+        // --- LÍDER (Gestión de Panel) ---
+        function initLeaderListeners() {
+            onSnapshot(doc(db, `artifacts/${appId}/app_data`, 'config'), (s) => {
+                if(s.exists()) {
+                    globalConfig = s.data();
+                    document.getElementById('inviteCodeDisplay').innerText = globalConfig.inviteCode;
+                    const durationText = globalConfig.codeDuration ? `${globalConfig.codeDuration} Meses` : '1 Mes';
+                    document.getElementById('codeDurationDisplay').innerText = durationText;
+
+                    const st = document.getElementById('inviteStatusDisplay');
+                    st.innerHTML = globalConfig.inviteActive 
+                        ? '<span class="w-2 h-2 bg-green-400 rounded-full mr-2"></span>Activo' 
+                        : '<span class="w-2 h-2 bg-red-400 rounded-full mr-2"></span>Inactivo';
+                    st.className = `px-3 py-1 rounded-full text-xs font-bold border ${globalConfig.inviteActive ? 'bg-green-900/30 border-green-500/30 text-green-400' : 'bg-red-900/30 border-red-500/30 text-red-400'} flex items-center`;
+                }
+            });
+
+            onSnapshot(collection(db, `artifacts/${appId}/public_users`), (s) => {
+                const tb = document.getElementById('adminListBody');
+                tb.innerHTML = '';
+                s.forEach(d => {
+                    if(d.data().email === LEADER_EMAIL) return;
+                    const u = d.data();
+                    
+                    let subStatus = '<span class="text-gray-400 text-xs">Indefinido</span>';
+                    if(u.subscriptionEnd) {
+                        const days = Math.ceil((new Date(u.subscriptionEnd) - new Date()) / (86400000));
+                        if(days < 0) subStatus = '<span class="text-red-400 text-xs font-bold">Vencido</span>';
+                        else subStatus = `<span class="text-brand-400 text-xs font-bold">${days} días</span>`;
+                    }
+
+                    tb.innerHTML += `
+                        <tr class="border-b border-gray-700/50 hover:bg-white/5 transition-colors">
+                            <td class="p-4 font-medium text-gray-200 flex items-center gap-3">
+                                <div class="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center text-xs font-bold text-white">${u.name.charAt(0)}</div>
+                                <div>
+                                    <p>${u.name}</p>
+                                    ${subStatus}
+                                </div>
+                            </td>
+                            <td class="p-4 text-gray-400 text-sm hidden md:table-cell">${u.email}</td>
+                            <td class="p-4 text-right flex items-center justify-end gap-2">
+                                <button onclick="openRenewModal('${d.id}', '${u.name}')" class="px-3 py-1.5 rounded-lg bg-purple-600/20 text-purple-400 hover:bg-purple-600 hover:text-white border border-purple-500/30 transition-all text-xs font-bold flex items-center gap-1" title="Renovar Membresía">
+                                    <i class="fa-solid fa-clock-rotate-left"></i>
+                                </button>
+                                <button onclick="viewAdminSales('${d.id}', '${u.name}')" class="px-3 py-1.5 rounded-lg bg-blue-600/20 text-blue-400 hover:bg-blue-600 hover:text-white border border-blue-500/30 transition-all text-xs font-bold flex items-center gap-1" title="Ver Ventas">
+                                    <i class="fa-solid fa-eye"></i>
+                                </button>
+                                <button onclick="toggleUser('${d.id}', ${u.isActive})" class="px-3 py-1.5 rounded-lg text-xs font-bold transition-all border ${u.isActive ? 'border-red-500/30 text-red-400 hover:bg-red-500/20' : 'border-green-500/30 text-green-400 hover:bg-green-500/20'}" title="Bloquear Acceso">
+                                    ${u.isActive ? '<i class="fa-solid fa-ban"></i>' : '<i class="fa-solid fa-check"></i>'}
+                                </button>
+                            </td>
+                        </tr>`;
+                });
+            });
+        }
+
+        // --- SUPERVISOR LOGIC (Ver Ventas de Otros) ---
+        window.viewAdminSales = async (adminId, adminName) => {
+            if(!isLeader) return;
+            const modal = document.getElementById('adminSalesModal');
+            const container = document.getElementById('adminSalesContainer');
+            const title = document.getElementById('adminSalesTitle');
+            const stats = document.getElementById('adminTotalRevenue');
+            
+            title.innerHTML = `Ventas de <span class="text-brand-600">${adminName}</span>`;
+            stats.innerText = "Cargando...";
+            container.innerHTML = '<div class="text-center py-20"><i class="fa-solid fa-circle-notch fa-spin text-3xl text-brand-500"></i><p class="text-gray-400 mt-4 text-sm font-medium">Obteniendo registros...</p></div>';
+            modal.classList.remove('hidden');
+
+            try {
+                const q = collection(db, `artifacts/${appId}/users/${adminId}/sales`);
+                onSnapshot(q, async (snap) => {
+                    if (snap.empty) {
+                        container.innerHTML = emptyState("Este administrador no tiene ventas.");
+                        stats.innerText = "$0.00";
+                        return;
+                    }
+
+                    let html = '';
+                    let total = 0;
+                    const sales = snap.docs.map(d => ({id: d.id, ...d.data()}));
+                    sales.sort((a,b) => new Date(b.end) - new Date(a.end));
+
+                    for (let s of sales) {
+                        let clientName = "Cliente Eliminado";
+                        let platName = "Servicio Eliminado";
+                        let platImg = null;
+
+                        try {
+                            const cRef = doc(db, `artifacts/${appId}/users/${adminId}/clients`, s.clientId);
+                            const pRef = doc(db, `artifacts/${appId}/users/${adminId}/platforms`, s.platformId);
+                            const [cSnap, pSnap] = await Promise.all([getDoc(cRef), getDoc(pRef)]);
+                            
+                            if(cSnap.exists()) clientName = cSnap.data().name;
+                            if(pSnap.exists()) {
+                                    platName = pSnap.data().name;
+                                    platImg = pSnap.data().image;
+                            }
+                        } catch (err) { console.log("Referencia rota", err); }
+
+                        total += parseFloat(s.price || 0);
+
+                        s.resolvedClientName = clientName;
+                        s.resolvedPlatName = platName;
+                        const saleDataEncoded = encodeURIComponent(JSON.stringify(s));
+
+                        html += `
+                            <div onclick="viewAdminSaleDetails('${saleDataEncoded}')" class="flex items-center justify-between p-4 bg-white rounded-xl border border-gray-100 mb-3 cursor-pointer hover:border-brand-300 hover:shadow-md hover:bg-brand-50/30 transition-all group relative overflow-hidden">
+                                <div class="absolute right-0 top-0 h-full w-1 bg-brand-500 opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                                <div class="flex items-center gap-4">
+                                    <div class="w-12 h-12 bg-gray-50 border border-gray-200 rounded-xl flex items-center justify-center p-1.5 overflow-hidden shadow-sm group-hover:border-brand-200 transition-colors">
+                                        ${platImg ? `<img src="${platImg}" class="w-full h-full object-contain">` : '<i class="fa-solid fa-ticket text-gray-300"></i>'}
+                                    </div>
+                                    <div>
+                                        <p class="font-bold text-sm text-gray-900 group-hover:text-brand-700 transition-colors">${platName}</p>
+                                        <p class="text-xs text-gray-500 flex items-center gap-1"><i class="fa-regular fa-user text-[10px]"></i> ${clientName}</p>
+                                    </div>
+                                </div>
+                                <div class="text-right">
+                                    <p class="font-bold text-brand-600 text-lg">$${s.price}</p>
+                                    <p class="text-[10px] text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full inline-block">Fin: ${s.end}</p>
+                                </div>
+                            </div>
+                        `;
+                    }
+                    container.innerHTML = html;
+                    stats.innerText = `$${total.toFixed(2)}`;
+                });
+            } catch (e) {
+                container.innerHTML = '<p class="text-red-500 text-center font-bold py-10">Error cargando datos.</p>';
+            }
+        }
+
+        window.viewAdminSaleDetails = (saleDataEncoded) => {
+            const s = JSON.parse(decodeURIComponent(saleDataEncoded));
+            const content = document.getElementById('adminSaleDetailsContent');
+
+            const dataRow = (label, value, icon, isCopyable = true) => {
+                const valDisplay = value ? value : '<span class="text-gray-300 italic font-normal">No especificado</span>';
+                const copyBtn = (value && isCopyable) ? `
+                    <button onclick="navigator.clipboard.writeText('${value}'); showToast('Copiado: ${label}')" class="text-gray-300 hover:text-brand-500 transition-colors p-1">
+                        <i class="fa-regular fa-copy"></i>
+                    </button>` : '';
+                    
+                return `
+                <div class="bg-slate-50 p-4 rounded-2xl border border-slate-100 flex justify-between items-center group hover:border-brand-200 transition-colors">
+                    <div class="overflow-hidden">
+                        <p class="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 flex items-center gap-2">
+                            <i class="${icon} text-brand-500"></i> ${label}
+                        </p>
+                        <p class="font-mono text-sm font-bold text-slate-800 break-all select-all truncate pr-2">${valDisplay}</p>
+                    </div>
+                    ${copyBtn}
+                </div>`;
+            };
+
+            content.innerHTML = `
+                <div class="mb-4 p-3 bg-blue-50 rounded-xl border border-blue-100 text-center">
+                    <p class="text-xs text-blue-600 font-medium">
+                        <i class="fa-solid fa-info-circle mr-1"></i> Viendo datos de: <strong>${s.resolvedPlatName}</strong> para <strong>${s.resolvedClientName}</strong>
+                    </p>
+                </div>
+                ${dataRow('Correo / Usuario', s.email, 'fa-solid fa-envelope')}
+                ${dataRow('Contraseña', s.password, 'fa-solid fa-key')}
+                <div class="grid grid-cols-2 gap-4">
+                    ${dataRow('Perfil', s.profile, 'fa-regular fa-circle-user', false)}
+                    ${dataRow('PIN', s.pin, 'fa-solid fa-lock', false)}
+                </div>
+                <div class="pt-2">
+                     <p class="text-center text-[10px] text-gray-400 font-mono">ID REF: ${s.id}</p>
+                </div>
+            `;
+            openModal('adminSaleDetailsModal');
+        }
+
+        // --- ACCIONES DE LÍDER ---
+        window.generateCode = async () => {
+            if(!isLeader) return;
+            const newCode = 'INV-' + Math.random().toString(36).substr(2, 6).toUpperCase();
+            const durationSelect = document.getElementById('codeDurationSelect');
+            const months = parseInt(durationSelect.value);
+
+            await setDoc(doc(db, `artifacts/${appId}/app_data`, 'config'), { 
+                inviteCode: newCode,
+                codeDuration: months 
+            }, { merge: true });
+            showToast(`Código generado (${months} Meses)`);
+        }
+
+        window.toggleInvite = async () => {
+            if(!isLeader) return;
+            await setDoc(doc(db, `artifacts/${appId}/app_data`, 'config'), { 
+                inviteActive: !globalConfig.inviteActive,
+                inviteCode: globalConfig.inviteCode || 'INIT',
+                codeDuration: globalConfig.codeDuration || 1
+            }, { merge: true });
+        }
+        
+        window.toggleUser = async (uid, state) => {
+            if(!isLeader) return;
+            await updateDoc(doc(db, `artifacts/${appId}/public_users`, uid), { isActive: !state });
+            showToast("Estado de usuario actualizado");
+        }
+
+        let userToRenew = null;
+        window.openRenewModal = (uid, name) => {
+            userToRenew = uid;
+            document.getElementById('renewUserName').innerText = name;
+            openModal('renewModal');
+        }
+
+        window.submitRenew = async () => {
+            if(!isLeader || !userToRenew) return;
+
+            const btn = document.querySelector('#renewModal button.bg-purple-600');
+            const originalText = btn.innerText;
+            btn.innerText = "Procesando...";
+            btn.disabled = true;
+
+            try {
+                const monthsToAdd = parseInt(document.getElementById('renewMonths').value);
+                const userRef = doc(db, `artifacts/${appId}/public_users`, userToRenew);
+                
+                const userSnap = await getDoc(userRef);
+                if (!userSnap.exists()) throw new Error("Usuario no encontrado");
+                
+                const userData = userSnap.data();
+                const now = new Date();
+                let baseDate = now; 
+
+                if (userData.subscriptionEnd) {
+                    const currentEnd = new Date(userData.subscriptionEnd);
+                    if (currentEnd > now) baseDate = currentEnd;
+                }
+
+                const newEndDate = new Date(baseDate);
+                newEndDate.setMonth(newEndDate.getMonth() + monthsToAdd);
+
+                await updateDoc(userRef, {
+                    subscriptionEnd: newEndDate.toISOString(),
+                    isActive: true 
+                });
+
+                showToast("Membresía Renovada y Acumulada");
+                closeModal('renewModal');
+            } catch (e) {
+                console.error(e);
+                showToast("Error al renovar", "error");
+            } finally {
+                btn.innerText = originalText;
+                btn.disabled = false;
+            }
+        }
+
+        // --- ACCIONES DE DATOS ---
+        window.saveClient = async () => {
+            const n = document.getElementById('clientName');
+            const p = document.getElementById('clientPhone');
+            if(!n.value || !p.value) return showToast("Faltan datos", "error");
+            await addDoc(collection(db, `artifacts/${appId}/users/${currentUser.uid}/clients`), { name: n.value, phone: p.value });
+            n.value = ''; p.value = '';
+            closeModal('clientModal'); showToast("Cliente guardado");
+        }
+
+        window.updatePlatPreview = (url) => { 
+            const img = document.getElementById('platPreview'); 
+            if(url){ img.src=url; img.classList.remove('hidden'); }
+            else { img.classList.add('hidden'); }
+        }
+
+        window.savePlatform = async () => {
+            const nameInput = document.getElementById('platName');
+            const priceInput = document.getElementById('platPrice');
+            const imgInput = document.getElementById('platImageURL');
+            const name = nameInput.value;
+            const price = priceInput.value;
+            const img = imgInput.value;
+
+            if(!name || !price) return showToast("Faltan datos", "error");
+            
+            try {
+                await addDoc(collection(db, `artifacts/${appId}/users/${currentUser.uid}/platforms`), { 
+                    name, 
+                    price: parseFloat(price), 
+                    image: img || null, 
+                    createdAt: new Date().toISOString() 
+                });
+                
+                nameInput.value = ''; priceInput.value = ''; imgInput.value = '';
+                document.getElementById('platPreview').src = '';
+                document.getElementById('platPreview').classList.add('hidden');
+                closeModal('platformModal'); 
+                showToast("Plataforma guardada");
+            } catch (e) { showToast("Error al guardar", "error"); }
+        }
+
+        window.saveSale = async () => {
+            const clientSelect = document.getElementById('saleClient');
+            const platSelect = document.getElementById('salePlatform');
+            const startInput = document.getElementById('saleStart');
+            const durationInput = document.getElementById('saleDuration');
+            const emailInput = document.getElementById('saleEmail');
+            const passInput = document.getElementById('salePass');
+            const profileInput = document.getElementById('saleProfile');
+            const pinInput = document.getElementById('salePin');
+
+            const clientId = clientSelect.value;
+            const platformId = platSelect.value;
+            const start = startInput.value;
+            const duration = durationInput.value;
+            
+            if(!clientId || !platformId || !start) return showToast("Faltan datos", "error");
+            
+            const price = platSelect.options[platSelect.selectedIndex].getAttribute('data-price');
+            const endDate = new Date(start); 
+            endDate.setMonth(endDate.getMonth() + parseInt(duration));
+            
+            await addDoc(collection(db, `artifacts/${appId}/users/${currentUser.uid}/sales`), { 
+                clientId, platformId, start, duration, price: parseFloat(price), 
+                end: endDate.toISOString().split('T')[0], 
+                email: emailInput.value, password: passInput.value, profile: profileInput.value, pin: pinInput.value, 
+                createdAt: new Date().toISOString() 
+            });
+            
+            clientSelect.value = ''; platSelect.value = ''; startInput.valueAsDate = new Date();
+            durationInput.value = '1'; emailInput.value = ''; passInput.value = ''; profileInput.value = ''; pinInput.value = '';
+
+            closeModal('saleModal'); showToast("Venta registrada");
+        }
+
+        window.deleteItem = async (col, id) => {
+            if(confirm("¿Estás seguro de eliminar esto?")) {
+                await deleteDoc(doc(db, `artifacts/${appId}/users/${currentUser.uid}/${col}`, id));
+                showToast("Registro eliminado");
+            }
+        }
+
+        const emptyState = (msg) => `
+            <div class="col-span-full py-12 flex flex-col items-center justify-center text-gray-400 fade-in">
+                <div class="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-4 text-2xl">
+                    <i class="fa-regular fa-folder-open"></i>
+                </div>
+                <p class="font-medium">${msg}</p>
+            </div>
+        `;
+        
+        // UI HELPERS
+        window.showView = (id) => {
+            ['view-dashboard','view-clients','view-platforms','view-sales','view-leader','view-table','auth-login','auth-register'].forEach(v => document.getElementById(v)?.classList.add('hidden'));
+            document.getElementById(id).classList.remove('hidden');
+            document.getElementById('mobileMenu').classList.add('-translate-x-full');
+            document.querySelectorAll('.nav-item').forEach(e => {
+                e.classList.remove('bg-brand-600', 'text-white', 'shadow-md');
+                e.classList.add('text-gray-400', 'hover:bg-slate-800', 'hover:text-white');
+            });
+            const btn = document.querySelector(`[onclick="showView('${id}')"]`);
+            if(btn) {
+                btn.classList.remove('text-gray-400', 'hover:bg-slate-800');
+                btn.classList.add('bg-brand-600', 'text-white', 'shadow-md');
+            }
+        }
+        window.openModal = (id) => { 
+            const m = document.getElementById(id); m.classList.remove('hidden'); 
+            m.querySelector('.bg-white').classList.add('scale-100');
+            if(id === 'saleModal') document.getElementById('saleStart').valueAsDate = new Date();
+        }
+        window.closeModal = (id) => document.getElementById(id).classList.add('hidden');
+        window.showToast = (msg, type='success') => {
+            const t = document.getElementById('toast');
+            t.className = `fixed bottom-6 right-6 px-6 py-4 rounded-xl shadow-2xl text-white font-medium flex items-center gap-3 transition-all duration-500 transform z-50 ${type==='error'?'bg-red-500':'bg-gray-900'}`;
+            t.innerHTML = `<i class="fa-solid ${type==='error'?'fa-circle-exclamation':'fa-circle-check'} text-lg"></i> ${msg}`;
+            t.classList.remove('translate-y-24', 'opacity-0');
+            setTimeout(() => t.classList.add('translate-y-24', 'opacity-0'), 3500);
+        }
+        window.copyCode = () => {
+            navigator.clipboard.writeText(document.getElementById('inviteCodeDisplay').innerText);
+            showToast("Código copiado al portapapeles");
+        }
+    </script>
+</head>
+<body class="bg-slate-50 text-slate-800 h-screen overflow-hidden selection:bg-brand-200">
+
+    <div id="expired-container" class="hidden h-screen w-full bg-slate-900 flex items-center justify-center p-4 relative overflow-hidden z-[60]">
+        <div class="bg-white rounded-3xl p-8 max-w-md w-full text-center relative z-10">
+            <div class="w-20 h-20 bg-red-100 text-red-500 rounded-full flex items-center justify-center text-4xl mx-auto mb-6">
+                <i class="fa-solid fa-lock"></i>
+            </div>
+            <h2 class="text-2xl font-bold text-slate-900 mb-2">Membresía Finalizada</h2>
+            <p class="text-slate-500 mb-6">Tu plan de servicio ha expirado. Por favor, comunícate con el Administrador Supremo para renovar tu acceso.</p>
+            <button onclick="doLogout()" class="w-full bg-slate-900 text-white py-3 rounded-xl font-bold hover:bg-slate-800 transition">Cerrar Sesión</button>
+        </div>
+    </div>
+
+    <div id="auth-container" class="h-screen w-full bg-slate-900 flex items-center justify-center p-4 relative overflow-hidden">
+        <div class="absolute inset-0 opacity-10 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')]"></div>
+        <div class="absolute w-96 h-96 bg-brand-600/20 rounded-full blur-3xl -top-10 -left-10 animate-pulse"></div>
+        
+        <div id="auth-login" class="bg-white/95 backdrop-blur-xl w-full max-w-sm p-8 rounded-3xl shadow-2xl relative z-10 fade-in border border-white/20">
+            <div class="text-center mb-8">
+                <div class="w-16 h-16 bg-gradient-to-tr from-brand-600 to-brand-400 rounded-2xl flex items-center justify-center text-white text-3xl mx-auto mb-4 shadow-lg shadow-brand-500/30">
+                    <i class="fa-solid fa-layer-group"></i>
+                </div>
+                <h2 class="text-2xl font-bold text-slate-900">StreamTrack</h2>
+                <p class="text-slate-500 text-sm">Panel de Administración</p>
+            </div>
+            <form onsubmit="handleLogin(event)" class="space-y-5">
+                <div>
+                    <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Email</label>
+                    <input type="email" id="loginEmail" required class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none transition-all">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Contraseña</label>
+                    <input type="password" id="loginPass" required class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none transition-all">
+                </div>
+                <button type="submit" class="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-3.5 rounded-xl shadow-lg hover:shadow-xl transition-all active:scale-[0.98]">
+                    Iniciar Sesión
+                </button>
+            </form>
+            <div class="mt-6 text-center pt-6 border-t border-slate-100">
+                <button onclick="showView('auth-register')" class="text-sm text-brand-600 hover:text-brand-800 font-medium">Crear cuenta nueva</button>
+            </div>
+        </div>
+
+        <div id="auth-register" class="hidden bg-white/95 backdrop-blur-xl w-full max-w-sm p-8 rounded-3xl shadow-2xl relative z-10 fade-in border border-white/20">
+            <h2 class="text-2xl font-bold text-slate-900 mb-2">Nueva Cuenta</h2>
+            <p class="text-sm text-slate-500 mb-6">Ingresa el código proporcionado por el líder.</p>
+            <form onsubmit="handleRegister(event)" class="space-y-4">
+                <input type="text" id="regName" placeholder="Tu Nombre" required class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-brand-500 outline-none">
+                <input type="email" id="regEmail" placeholder="Correo" required class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-brand-500 outline-none">
+                <input type="password" id="regPass" placeholder="Contraseña" required class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-brand-500 outline-none">
+                <div class="relative">
+                    <input type="text" id="regCode" placeholder="CÓDIGO DE ACCESO" class="w-full px-4 py-3 bg-brand-50 border border-brand-200 text-brand-800 font-mono text-center tracking-widest rounded-xl focus:ring-2 focus:ring-brand-500 outline-none uppercase placeholder:text-brand-300">
+                    <i class="fa-solid fa-key absolute right-4 top-3.5 text-brand-300"></i>
+                </div>
+                <button type="submit" class="w-full bg-brand-600 hover:bg-brand-700 text-white font-bold py-3.5 rounded-xl shadow-lg transition-all active:scale-[0.98]">Registrar</button>
+            </form>
+            <div class="mt-4 text-center">
+                <button onclick="showView('auth-login')" class="text-sm text-slate-400 hover:text-slate-600">Cancelar</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="app-container" class="hidden flex h-screen w-full">
+        
+        <aside id="mobileMenu" class="fixed inset-y-0 left-0 z-40 w-72 bg-slate-900 text-slate-300 transform -translate-x-full md:translate-x-0 transition-transform duration-300 flex flex-col shadow-2xl border-r border-slate-800">
+            <div class="p-8 pb-4 flex items-center gap-3">
+                <div class="w-10 h-10 bg-brand-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-brand-500/20">
+                    <i class="fa-solid fa-layer-group"></i>
+                </div>
+                <div>
+                    <h1 class="font-bold text-white text-lg leading-tight">StreamTrack</h1>
+                    <p class="text-xs text-brand-500 font-semibold tracking-wide">MASTER</p>
+                </div>
+            </div>
+
+            <div class="px-6 py-4">
+                <div class="bg-slate-800/50 rounded-xl p-3 flex items-center gap-3 border border-slate-700/50">
+                    <div class="w-10 h-10 rounded-full bg-gradient-to-br from-slate-600 to-slate-700 flex items-center justify-center text-white font-bold" id="userAvatar">U</div>
+                    <div class="overflow-hidden">
+                        <p class="text-sm font-bold text-white truncate" id="userNameDisplay">...</p>
+                        <p class="text-[10px] text-slate-400 uppercase tracking-wider" id="userRoleDisplay">...</p>
+                    </div>
+                </div>
+                <div class="mt-4 bg-brand-900/20 border border-brand-500/20 p-3 rounded-xl">
+                    <p class="text-[10px] uppercase font-bold text-brand-400 mb-1">Membresía Restante</p>
+                    <p class="text-white font-bold text-lg flex items-center gap-2"><i class="fa-regular fa-clock"></i> <span id="daysRemainingDisplay">...</span></p>
+                </div>
+            </div>
+            
+            <nav class="flex-1 overflow-y-auto px-4 space-y-1 py-2 custom-scrollbar">
+                <div id="leaderMenu" class="hidden mb-6">
+                    <p class="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 mt-2">Administración</p>
+                    <button onclick="showView('view-leader')" class="nav-item w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all group">
+                        <i class="fa-solid fa-shield-cat w-5 text-center group-hover:text-brand-400 transition-colors"></i> Panel Líder
+                    </button>
+                </div>
+
+                <p class="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Mi Negocio</p>
+                <button onclick="showView('view-dashboard')" class="nav-item w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all group">
+                    <i class="fa-solid fa-chart-pie w-5 text-center group-hover:text-brand-400 transition-colors"></i> Dashboard
+                </button>
+                <button onclick="showView('view-sales')" class="nav-item w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all group">
+                    <i class="fa-solid fa-ticket w-5 text-center group-hover:text-brand-400 transition-colors"></i> Ventas
+                </button>
+                <button onclick="showView('view-clients')" class="nav-item w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all group">
+                    <i class="fa-solid fa-users w-5 text-center group-hover:text-brand-400 transition-colors"></i> Clientes
+                </button>
+                <button onclick="showView('view-platforms')" class="nav-item w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all group">
+                    <i class="fa-brands fa-xbox w-5 text-center group-hover:text-brand-400 transition-colors"></i> Plataformas
+                </button>
+                
+                <button onclick="showView('view-table')" class="nav-item w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all group">
+                    <i class="fa-solid fa-table w-5 text-center group-hover:text-brand-400 transition-colors"></i> Tabla
+                </button>
+            </nav>
+
+            <div class="p-4 border-t border-slate-800">
+                <button onclick="doLogout()" class="w-full flex items-center justify-center gap-2 py-3 rounded-xl text-slate-400 hover:bg-red-500/10 hover:text-red-400 transition-all text-sm font-medium">
+                    <i class="fa-solid fa-right-from-bracket"></i> Cerrar Sesión
+                </button>
+            </div>
+        </aside>
+
+        <main class="flex-1 flex flex-col h-screen overflow-hidden relative bg-slate-50 w-full">
+            <header class="h-20 bg-white/80 backdrop-blur-md border-b border-gray-200 flex items-center justify-between px-6 md:px-10 z-30 sticky top-0">
+                <button onclick="document.getElementById('mobileMenu').classList.remove('-translate-x-full')" class="md:hidden text-slate-600 text-xl"><i class="fa-solid fa-bars"></i></button>
+                <h2 class="text-xl font-bold text-slate-800 tracking-tight">Panel de Control</h2>
+                <button onclick="openNotifications()" class="relative w-8 h-8 rounded-full bg-brand-100 text-brand-600 flex items-center justify-center text-sm font-bold border border-brand-200 hover:bg-brand-200 transition-colors">
+                    <i class="fa-regular fa-bell"></i>
+                    <span id="notifBadge" class="hidden absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full border-2 border-white text-[9px] text-white flex items-center justify-center"></span>
+                </button>
+            </header>
+
+            <div class="flex-1 overflow-y-auto p-6 md:p-10 scroll-smooth custom-scrollbar">
+                
+                <div id="view-dashboard" class="space-y-8 fade-in">
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div onclick="showView('view-sales')" class="cursor-pointer bg-white p-6 rounded-2xl shadow-sm border border-gray-100 relative overflow-hidden group hover:-translate-y-1 transition-transform duration-300">
+                            <div class="absolute right-0 top-0 w-24 h-24 bg-brand-50 rounded-bl-full -mr-4 -mt-4 transition-transform group-hover:scale-110"></div>
+                            <div class="relative z-10">
+                                <p class="text-slate-400 text-sm font-medium uppercase tracking-wider mb-1">Ingresos Totales</p>
+                                <h3 class="text-3xl font-bold text-slate-800 tracking-tight" id="statRevenue">$0.00</h3>
+                            </div>
+                            <div class="absolute bottom-6 right-6 text-brand-500 text-2xl opacity-50 group-hover:opacity-100 transition-opacity">
+                                <i class="fa-solid fa-sack-dollar"></i>
+                            </div>
+                        </div>
+                        <div onclick="showView('view-clients')" class="cursor-pointer bg-white p-6 rounded-2xl shadow-sm border border-gray-100 relative overflow-hidden group hover:-translate-y-1 transition-transform duration-300">
+                             <div class="absolute right-0 top-0 w-24 h-24 bg-green-50 rounded-bl-full -mr-4 -mt-4 transition-transform group-hover:scale-110"></div>
+                            <div class="relative z-10">
+                                <p class="text-slate-400 text-sm font-medium uppercase tracking-wider mb-1">Clientes Activos</p>
+                                <h3 class="text-3xl font-bold text-slate-800 tracking-tight" id="statClients">0</h3>
+                            </div>
+                            <div class="absolute bottom-6 right-6 text-green-500 text-2xl opacity-50 group-hover:opacity-100 transition-opacity">
+                                <i class="fa-solid fa-users"></i>
+                            </div>
+                        </div>
+                        <div onclick="showView('view-sales')" class="cursor-pointer bg-white p-6 rounded-2xl shadow-sm border border-gray-100 relative overflow-hidden group hover:-translate-y-1 transition-transform duration-300">
+                             <div class="absolute right-0 top-0 w-24 h-24 bg-purple-50 rounded-bl-full -mr-4 -mt-4 transition-transform group-hover:scale-110"></div>
+                            <div class="relative z-10">
+                                <p class="text-slate-400 text-sm font-medium uppercase tracking-wider mb-1">Servicios Vendidos</p>
+                                <h3 class="text-3xl font-bold text-slate-800 tracking-tight" id="statServices">0</h3>
+                            </div>
+                            <div class="absolute bottom-6 right-6 text-purple-500 text-2xl opacity-50 group-hover:opacity-100 transition-opacity">
+                                <i class="fa-solid fa-ticket"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="view-table" class="hidden fade-in space-y-6">
+                    <div class="flex justify-between items-end">
+                        <div class="flex items-center gap-3">
+                            <button onclick="showView('view-dashboard')" class="w-10 h-10 rounded-full bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-brand-600 hover:border-brand-200 transition-all shadow-sm active:scale-95">
+                                <i class="fa-solid fa-chevron-left"></i>
+                            </button>
+                            <div>
+                                <h2 class="text-2xl font-bold text-slate-800">Tabla de Registros</h2>
+                                <p class="text-slate-500 text-sm mt-1">Vista detallada de todas las ventas.</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-sm text-left text-gray-500">
+                                <thead class="text-xs text-gray-700 uppercase bg-gray-50">
+                                    <tr>
+                                        <th class="px-6 py-3">Cliente</th>
+                                        <th class="px-6 py-3">Plataforma</th>
+                                        <th class="px-6 py-3">Datos Acceso</th>
+                                        <th class="px-6 py-3">Inicio</th>
+                                        <th class="px-6 py-3">Fin</th>
+                                        <th class="px-6 py-3">Estado</th>
+                                        <th class="px-6 py-3 text-right">Precio</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="salesTableBody">
+                                    </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="view-leader" class="hidden space-y-6 fade-in">
+                    <div class="flex items-center gap-3">
+                        <button onclick="showView('view-dashboard')" class="w-10 h-10 rounded-full bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-brand-600 hover:border-brand-200 transition-all shadow-sm active:scale-95">
+                            <i class="fa-solid fa-chevron-left"></i>
+                        </button>
+                        <div>
+                            <h2 class="text-2xl font-bold text-slate-800">Panel de Líder</h2>
+                            <p class="text-slate-500 text-sm">Gestión de usuarios y accesos.</p>
+                        </div>
+                    </div>
+
+                    <div class="bg-slate-900 rounded-2xl p-6 md:p-8 text-white shadow-xl relative overflow-hidden">
+                         <div class="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full blur-3xl -mr-16 -mt-16"></div>
+                        <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 relative z-10">
+                            <div>
+                                <h3 class="text-2xl font-bold flex items-center gap-3"><i class="fa-solid fa-lock text-brand-400"></i> Acceso Seguro</h3>
+                                <p class="text-slate-400 text-sm mt-1">Genera códigos temporales para nuevos administradores.</p>
+                            </div>
+                            <div class="flex flex-col gap-3 w-full md:w-auto">
+                                <div class="flex items-center gap-2">
+                                    <select id="codeDurationSelect" class="bg-slate-800 text-white border border-slate-700 rounded-lg px-3 py-2 text-sm outline-none focus:border-brand-500">
+                                        <option value="1">1 Mes</option>
+                                        <option value="2">2 Meses</option>
+                                        <option value="3">3 Meses</option>
+                                        <option value="6">6 Meses</option>
+                                        <option value="12">12 Meses</option>
+                                    </select>
+                                </div>
+
+                                <div class="bg-black/40 rounded-xl p-2 pl-4 flex items-center border border-white/10">
+                                    <span id="inviteCodeDisplay" class="font-mono text-lg tracking-widest text-brand-300 mr-4">...</span>
+                                    <div class="flex gap-1">
+                                        <button onclick="copyCode()" class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/10 text-slate-300 transition-colors" title="Copiar"><i class="fa-solid fa-copy"></i></button>
+                                        <button onclick="generateCode()" class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/10 text-green-400 transition-colors" title="Regenerar"><i class="fa-solid fa-arrows-rotate"></i></button>
+                                    </div>
+                                </div>
+                                <div class="flex items-center justify-between gap-4 bg-white/5 p-2 rounded-lg">
+                                    <span class="text-xs font-bold uppercase tracking-wider text-slate-400 pl-2">Estado: <span id="codeDurationDisplay" class="text-white">1 Mes</span></span>
+                                    <div id="inviteStatusDisplay">...</div>
+                                    <button onclick="toggleInvite()" class="text-xs bg-brand-600 hover:bg-brand-500 px-3 py-1.5 rounded-lg font-bold transition-colors">Cambiar</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bg-slate-800 rounded-2xl shadow-lg border border-slate-700 overflow-hidden">
+                        <div class="p-6 border-b border-slate-700">
+                            <h3 class="font-bold text-white"><i class="fa-solid fa-users-gear mr-2 text-brand-400"></i> Equipo Administrativo</h3>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left">
+                                <tbody id="adminListBody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="view-clients" class="hidden fade-in space-y-6">
+                    <div class="flex justify-between items-end">
+                        <div class="flex items-center gap-3">
+                            <button onclick="showView('view-dashboard')" class="w-10 h-10 rounded-full bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-brand-600 hover:border-brand-200 transition-all shadow-sm active:scale-95">
+                                <i class="fa-solid fa-chevron-left"></i>
+                            </button>
+                            <div>
+                                <h2 class="text-2xl font-bold text-slate-800">Cartera de Clientes</h2>
+                                <p class="text-slate-500 text-sm mt-1">Gestiona contactos y números de WhatsApp.</p>
+                            </div>
+                        </div>
+                        <button onclick="openModal('clientModal')" class="bg-brand-600 hover:bg-brand-700 text-white px-5 py-2.5 rounded-full font-bold shadow-lg shadow-brand-500/30 flex items-center gap-2 transition-all hover:scale-105 active:scale-95">
+                            <i class="fa-solid fa-plus"></i> Nuevo Cliente
+                        </button>
+                    </div>
+                    <div id="clientsList" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div>
+                </div>
+
+                <div id="view-platforms" class="hidden fade-in space-y-6">
+                     <div class="flex justify-between items-end">
+                        <div class="flex items-center gap-3">
+                            <button onclick="showView('view-dashboard')" class="w-10 h-10 rounded-full bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-brand-600 hover:border-brand-200 transition-all shadow-sm active:scale-95">
+                                <i class="fa-solid fa-chevron-left"></i>
+                            </button>
+                            <div>
+                                <h2 class="text-2xl font-bold text-slate-800">Catálogo de Servicios</h2>
+                                <p class="text-slate-500 text-sm mt-1">Configura precios y logos de tus plataformas.</p>
+                            </div>
+                        </div>
+                        <button onclick="openModal('platformModal')" class="bg-brand-600 hover:bg-brand-700 text-white px-5 py-2.5 rounded-full font-bold shadow-lg shadow-brand-500/30 flex items-center gap-2 transition-all hover:scale-105 active:scale-95">
+                            <i class="fa-solid fa-plus"></i> Nueva Plataforma
+                        </button>
+                    </div>
+                    <div id="platformsList" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6"></div>
+                </div>
+
+                <div id="view-sales" class="hidden fade-in space-y-4">
+                    <div class="flex flex-col gap-4">
+                        <div class="flex justify-between items-center">
+                            <div class="flex gap-3">
+                                <button onclick="showView('view-dashboard')" class="w-10 h-10 rounded-full bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-brand-600 hover:border-brand-200 transition-all shadow-sm active:scale-95">
+                                    <i class="fa-solid fa-chevron-left"></i>
+                                </button>
+                                <div>
+                                    <h2 class="text-xl font-bold text-slate-800">Registro de Ventas</h2>
+                                    <p class="text-slate-500 text-sm">Gestiona tus suscripciones.</p>
+                                </div>
+                            </div>
+                            <button onclick="openModal('saleModal')" class="bg-green-600 text-white px-4 py-2 rounded-lg shadow-lg shadow-green-500/30 flex items-center gap-2">
+                                <i class="fa-solid fa-cart-plus"></i> Registrar
+                            </button>
+                        </div>
+                        
+                        <div class="relative">
+                            <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                <i class="fa-solid fa-magnifying-glass text-slate-400"></i>
+                            </div>
+                            <input type="text" id="salesSearchInput" onkeyup="applySalesFilter()" placeholder="Buscar por correo de cuenta..." class="pl-10 w-full p-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-brand-500 outline-none shadow-sm transition-all text-sm">
+                        </div>
+                    </div>
+
+                    <div id="salesList" class="space-y-2"></div>
+                </div>
+
+            </div>
+        </main>
+    </div>
+
+    <div id="notificationModal" class="hidden fixed inset-0 z-50 flex items-start justify-end p-4 sm:p-6 bg-slate-900/30 backdrop-blur-[2px]">
+        <div class="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden mt-12 slide-up border border-gray-100">
+            <div class="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
+                <h3 class="font-bold text-gray-800 flex items-center gap-2"><i class="fa-solid fa-bell text-brand-600"></i> Notificaciones</h3>
+                <button onclick="closeModal('notificationModal')" class="text-gray-400 hover:text-gray-600"><i class="fa-solid fa-times"></i></button>
+            </div>
+            <div id="notifContainer" class="max-h-[60vh] overflow-y-auto p-4 custom-scrollbar">
+                </div>
+        </div>
+    </div>
+
+    <div id="renewModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm"><div class="bg-white rounded-2xl p-6 w-full max-w-sm"><h3 class="font-bold mb-2">Renovar Membresía</h3><p class="text-sm text-gray-500 mb-4"><span id="renewUserName" class="font-bold text-brand-600"></span></p><select id="renewMonths" class="w-full border rounded-lg p-2 mb-6"><option value="1">1 Mes</option><option value="3">3 Meses</option><option value="6">6 Meses</option><option value="12">12 Meses</option></select><div class="flex gap-2"><button onclick="closeModal('renewModal')" class="flex-1 text-gray-500">Cancelar</button><button onclick="submitRenew()" class="flex-1 bg-purple-600 text-white rounded-lg p-2">Renovar</button></div></div></div>
+    
+    <div id="adminSalesModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm"><div class="bg-white rounded-2xl w-full max-w-lg h-[60vh] flex flex-col"><div class="p-4 border-b flex justify-between items-center"><div><h3 id="adminSalesTitle" class="font-bold">...</h3><p id="adminTotalRevenue" class="text-sm text-green-600 font-bold">...</p></div><button onclick="closeModal('adminSalesModal')" class="text-gray-400"><i class="fa-solid fa-times"></i></button></div><div id="adminSalesContainer" class="flex-1 overflow-y-auto p-4"></div></div></div>
+    
+    <div id="adminSaleDetailsModal" class="hidden fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm fade-in">
+        <div class="bg-white rounded-3xl p-6 w-full max-w-md relative shadow-2xl">
+            <button onclick="closeModal('adminSaleDetailsModal')" class="absolute top-5 right-5 text-gray-400 hover:text-gray-600 transition-colors bg-gray-100 rounded-full w-8 h-8 flex items-center justify-center">
+                <i class="fa-solid fa-times"></i>
+            </button>
+            <div class="text-center mb-6">
+                <div class="w-14 h-14 bg-brand-100 text-brand-600 rounded-2xl flex items-center justify-center text-2xl mx-auto mb-3 shadow-sm">
+                    <i class="fa-solid fa-shield-halved"></i>
+                </div>
+                <h3 class="font-bold text-xl text-slate-900">Datos de Acceso</h3>
+                <p class="text-slate-500 text-sm">Información sensible de la venta.</p>
+            </div>
+            <div class="space-y-4" id="adminSaleDetailsContent"></div>
+            <div class="mt-8 pt-4">
+                <button onclick="closeModal('adminSaleDetailsModal')" class="w-full bg-slate-900 text-white font-bold py-3.5 rounded-xl hover:bg-slate-800 transition active:scale-[0.98]">Cerrar Detalles</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="clientModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60"><div class="bg-white rounded-2xl p-6 w-full max-w-md"><h3 class="font-bold mb-4">Nuevo Cliente</h3><input id="clientName" placeholder="Nombre" class="w-full mb-2 p-2 border rounded"><input id="clientPhone" placeholder="Teléfono" class="w-full mb-4 p-2 border rounded"><div class="flex gap-2"><button onclick="closeModal('clientModal')" class="flex-1">Cancelar</button><button onclick="saveClient()" class="flex-1 bg-brand-600 text-white rounded p-2">Guardar</button></div></div></div>
+    
+    <div id="platformModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60">
+        <div class="bg-white rounded-2xl p-6 w-full max-w-md">
+            <h3 class="font-bold mb-4">Plataforma</h3>
+            <div class="mb-4">
+                <label class="block text-xs font-bold text-gray-400 mb-1">Logo (Enlace)</label>
+                <div class="flex gap-2 items-center">
+                    <input id="platImageURL" oninput="updatePlatPreview(this.value)" placeholder="Pegar enlace de imagen (https://...)" class="w-full p-2 border rounded text-sm">
+                    <img id="platPreview" src="" class="w-10 h-10 object-contain border rounded hidden">
+                </div>
+            </div>
+            <input id="platName" placeholder="Nombre" class="w-full mb-2 p-2 border rounded">
+            <input id="platPrice" placeholder="Precio" type="number" class="w-full mb-4 p-2 border rounded">
+            <div class="flex gap-2 mt-4">
+                <button onclick="closeModal('platformModal')" class="flex-1">Cancelar</button>
+                <button onclick="savePlatform()" class="flex-1 bg-brand-600 text-white rounded p-2">Guardar</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="saleModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60"><div class="bg-white rounded-2xl p-6 w-full max-w-md"><h3 class="font-bold mb-4">Nueva Venta</h3><select id="saleClient" class="w-full mb-2 p-2 border rounded"></select><select id="salePlatform" class="w-full mb-2 p-2 border rounded"></select><input id="saleEmail" placeholder="Correo" class="w-full mb-2 p-2 border rounded"><input id="salePass" placeholder="Contraseña" class="w-full mb-2 p-2 border rounded"><div class="flex gap-2 mb-2"><input id="saleProfile" placeholder="Perfil" class="w-full p-2 border rounded"><input id="salePin" placeholder="PIN" class="w-full p-2 border rounded"></div><div class="flex gap-2 mb-4"><input id="saleStart" type="date" class="flex-1 p-2 border rounded"><input id="saleDuration" type="number" value="1" class="flex-1 p-2 border rounded"></div><div class="flex gap-2"><button onclick="closeModal('saleModal')" class="flex-1">Cancelar</button><button onclick="saveSale()" class="flex-1 bg-green-600 text-white rounded p-2">Guardar</button></div></div></div>
+    <div id="toast" class="hidden"></div>
+</body>
+</html>
