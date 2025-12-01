@@ -106,9 +106,17 @@
                 currentUser = user;
                 isLeader = (user.email === LEADER_EMAIL);
                 
+                // Mostrar nombre y rol
                 document.getElementById('userNameDisplay').innerText = user.displayName || 'Admin';
                 document.getElementById('userRoleDisplay').innerText = isLeader ? 'Líder Supremo' : 'Administrador';
                 
+                // --- LÓGICA DE EDICIÓN DE NOMBRE (SOLO LÍDER) ---
+                if(isLeader) {
+                    document.getElementById('btnEditName').classList.remove('hidden');
+                } else {
+                    document.getElementById('btnEditName').classList.add('hidden');
+                }
+
                 document.getElementById('auth-container').classList.add('hidden');
                 document.getElementById('expired-container').classList.add('hidden');
                 document.getElementById('app-container').classList.remove('hidden');
@@ -190,6 +198,38 @@
         window.doLogout = async () => {
             await signOut(auth);
             location.reload();
+        }
+
+        // --- EDITAR NOMBRE (LÍDER) ---
+        window.openEditNameModal = () => {
+            if(!isLeader) return;
+            document.getElementById('editNameInput').value = currentUser.displayName;
+            openModal('nameModal');
+        }
+
+        window.saveNewName = async () => {
+            const newName = document.getElementById('editNameInput').value;
+            if(!newName) return showToast("El nombre no puede estar vacío", "error");
+
+            try {
+                // 1. Actualizar en Firebase Auth
+                await updateProfile(currentUser, { displayName: newName });
+                
+                // 2. Actualizar en Firestore (usando setDoc con merge para evitar errores si no existe)
+                await setDoc(doc(db, `artifacts/${appId}/public_users`, currentUser.uid), { 
+                    name: newName,
+                    email: currentUser.email, // Aseguramos datos básicos
+                    role: 'leader',
+                    isActive: true
+                }, { merge: true });
+                
+                document.getElementById('userNameDisplay').innerText = newName;
+                closeModal('nameModal');
+                showToast("Nombre actualizado correctamente");
+            } catch(e) {
+                console.error(e); // Para depuración
+                showToast("Error al actualizar nombre: " + e.message, "error");
+            }
         }
 
         // --- DATA LISTENERS ---
@@ -984,7 +1024,10 @@
                 <div class="bg-slate-800/50 rounded-xl p-3 flex items-center gap-3 border border-slate-700/50">
                     <div class="w-10 h-10 rounded-full bg-gradient-to-br from-slate-600 to-slate-700 flex items-center justify-center text-white font-bold" id="userAvatar">U</div>
                     <div class="overflow-hidden">
-                        <p class="text-sm font-bold text-white truncate" id="userNameDisplay">...</p>
+                        <div class="flex items-center gap-2">
+                            <p class="text-sm font-bold text-white truncate" id="userNameDisplay">...</p>
+                            <button id="btnEditName" onclick="openEditNameModal()" class="hidden text-xs text-brand-400 hover:text-white transition-colors" title="Editar Nombre"><i class="fa-solid fa-pen"></i></button>
+                        </div>
                         <p class="text-[10px] text-slate-400 uppercase tracking-wider" id="userRoleDisplay">...</p>
                     </div>
                 </div>
@@ -1241,6 +1284,18 @@
             </div>
             <div id="notifContainer" class="max-h-[60vh] overflow-y-auto p-4 custom-scrollbar">
                 </div>
+        </div>
+    </div>
+
+    <div id="nameModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+        <div class="bg-white rounded-2xl p-6 w-full max-w-sm shadow-xl slide-up">
+            <h3 class="font-bold text-slate-900 mb-2">Editar Nombre</h3>
+            <p class="text-xs text-slate-500 mb-4">Actualiza el nombre del Administrador Supremo.</p>
+            <input type="text" id="editNameInput" class="w-full px-4 py-2 border border-slate-200 rounded-xl mb-4 focus:ring-2 focus:ring-brand-500 outline-none" placeholder="Nuevo Nombre">
+            <div class="flex gap-2">
+                <button onclick="closeModal('nameModal')" class="flex-1 py-2 text-slate-500 hover:bg-slate-50 rounded-lg transition-colors">Cancelar</button>
+                <button onclick="saveNewName()" class="flex-1 bg-brand-600 text-white py-2 rounded-lg font-bold hover:bg-brand-700 transition-colors shadow-lg shadow-brand-500/30">Guardar</button>
+            </div>
         </div>
     </div>
 
