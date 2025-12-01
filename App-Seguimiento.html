@@ -1092,7 +1092,8 @@
             fieldsDates.classList.remove('hidden');
 
             // --- CAMBIO AQUÍ: Agregamos || category === 'documentos' ---
-            if (category === 'libros' || category === 'documentos') {
+            if (category === 'libros' || category === 'documentos' || category === 'herramientas') {
+
                 document.getElementById('inv-email').parentNode.classList.add('hidden'); // Ocultar email
                 fieldsBook.classList.remove('hidden'); // Mostrar Link
                 fieldsDates.classList.add('hidden'); // Ocultar Fechas
@@ -1128,7 +1129,8 @@
                 };
 
                 // --- CAMBIO AQUÍ: Agregamos || category === 'documentos' ---
-                if (category === 'libros' || category === 'documentos') {
+                if (category === 'libros' || category === 'documentos' || category === 'herramientas') {
+                
                     itemData.link = document.getElementById('inv-link').value;
                     itemData.password = document.getElementById('inv-pass').value; 
                     if(!itemData.link) return showToast('El link es obligatorio', 'error');
@@ -1766,13 +1768,16 @@
                     t.update(wRef, { balance: (currentBalance - cost) });
                     
                     // --- MODIFICACION: SOLO DESCONTAR STOCK SI NO ES LIBRO ---
-                                        // --- MODIFICACION: SOLO DESCONTAR STOCK SI NO ES LIBRO NI DOCUMENTO ---
-                    if (productData.category !== 'libros' && productData.category !== 'documentos') {
-                        // Marcar item como vendido
-                        t.update(doc(db, 'artifacts', appId, 'public', 'data', 'inventory_items', itemId), { status: 'sold', soldTo: currentUser.uid, soldAt: serverTimestamp() });
-                        // Restar stock del perfil
-                        t.update(pRef, { stock: (productData.stock || 0) - 1 });
-                    }
+                                        // --- MODIFICACION: CATEGORÍAS CON STOCK INFINITO ---
+// Agrega aquí todas las categorías que NO deben bajar de stock
+const infiniteCategories = ['libros', 'documentos', 'herramientas', 'cursos']; 
+
+if (!infiniteCategories.includes(productData.category)) {
+    // SI NO ES INFINITO: Marcar item como vendido y restar stock
+    t.update(doc(db, 'artifacts', appId, 'public', 'data', 'inventory_items', itemId), { status: 'sold', soldTo: currentUser.uid, soldAt: serverTimestamp() });
+    t.update(pRef, { stock: (productData.stock || 0) - 1 });
+}
+
 
                     // ---------------------------------------------------------
 
