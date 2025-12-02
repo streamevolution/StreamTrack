@@ -1075,41 +1075,50 @@
 
         // Función para mostrar/ocultar campos según categoría
                 // Función para mostrar/ocultar campos según categoría
+                // --- CÓDIGO NUEVO PARA VISUALIZACIÓN DE CAMPOS ---
         window.toggleInventoryFields = () => {
             const select = document.getElementById('inv-product-select');
             const selectedOption = select.options[select.selectedIndex];
+            
+            // Si no hay opción seleccionada, salir
+            if (!selectedOption) return;
+
             const category = selectedOption.getAttribute('data-category');
 
             const fieldsCreds = document.getElementById('fields-credentials');
             const fieldsProfile = document.getElementById('fields-profile-extra');
             const fieldsBook = document.getElementById('fields-book');
             const fieldsDates = document.getElementById('fields-dates');
+            const emailInputContainer = document.getElementById('inv-email').parentNode;
             
-            // Resetear visibilidad
+            // 1. Resetear todo a estado "normal" (Streaming)
             fieldsCreds.classList.remove('hidden');
+            emailInputContainer.classList.remove('hidden'); // Mostrar Email por defecto
             fieldsProfile.classList.add('hidden');
-            fieldsBook.classList.add('hidden');
-            fieldsDates.classList.remove('hidden');
+            fieldsProfile.classList.remove('grid'); // Quitar grid si estaba
+            fieldsBook.classList.add('hidden');     // Ocultar Link
+            fieldsDates.classList.remove('hidden'); // Mostrar Fechas
 
-                        // --- MODIFICADO: Agregamos || category === 'herramientas' ---
+            // 2. Aplicar lógica según categoría
             if (category === 'libros' || category === 'documentos' || category === 'herramientas') {
-                document.getElementById('inv-email').parentNode.classList.add('hidden'); // Ocultar email
-                fieldsBook.classList.remove('hidden'); // Mostrar Link
-                fieldsDates.classList.add('hidden'); // Ocultar Fechas
+                // CASO LINK (Libros, Herramientas, Documentos)
+                emailInputContainer.classList.add('hidden'); // Ocultar Email
+                fieldsBook.classList.remove('hidden');       // Mostrar Link
+                fieldsDates.classList.add('hidden');         // Ocultar Fechas (Expiración)
 
             } else if (category === 'perfiles' || category === 'cuentas') {
-                document.getElementById('inv-email').parentNode.classList.remove('hidden'); 
-                fieldsProfile.classList.remove('hidden'); 
-                fieldsProfile.classList.remove('grid'); 
+                // CASO CUENTAS (Netflix, Disney, etc)
+                fieldsProfile.classList.remove('hidden');
                 fieldsProfile.classList.add('grid');
-            } else {
-                document.getElementById('inv-email').parentNode.classList.remove('hidden');
             }
+            // Si es 'otros' o cualquier otra cosa, se queda con la config por defecto (Email + Pass + Fechas)
         };
+
 
 
         // Función Guardar Item Modificada
                 // Función Guardar Item Modificada
+                // --- CÓDIGO NUEVO PARA GUARDAR ITEM ---
         window.saveInventoryItem = async (e) => { 
             e.preventDefault(); 
             try { 
@@ -1127,13 +1136,15 @@
                     status: 'available'
                 };
 
-                                // --- MODIFICADO: Agregamos || category === 'herramientas' ---
+                // VERIFICAMOS SI ES TIPO "LINK" (Herramientas, Libros...)
                 if (category === 'libros' || category === 'documentos' || category === 'herramientas') {
                     itemData.link = document.getElementById('inv-link').value;
                     itemData.password = document.getElementById('inv-pass').value; 
-                    if(!itemData.link) return showToast('El link es obligatorio', 'error');
+                    
+                    if(!itemData.link) return showToast('El Link es obligatorio', 'error');
+                    // Aquí NO pedimos email ni fechas
                 } else {
-                    // Para Cuentas, Perfiles y Otros
+                    // TIPO "CUENTA" (Streaming, etc)
                     itemData.email = document.getElementById('inv-email').value;
                     itemData.password = document.getElementById('inv-pass').value;
                     itemData.expiryDate = document.getElementById('inv-expiry').value;
@@ -1147,8 +1158,10 @@
                     if(!itemData.email || !itemData.password) return showToast('Correo y contraseña requeridos', 'error');
                 }
 
+                // Guardar en Inventario
                 await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'inventory_items'), itemData); 
                 
+                // Sumar 1 al stock visual (Opcional, ya que será infinito, pero sirve para saber que hay items)
                 const productRef = doc(db, 'artifacts', appId, 'public', 'data', 'profiles', productId); 
                 await updateDoc(productRef, { stock: increment(1) }); 
                 
@@ -1156,9 +1169,10 @@
                 closeModal(); 
             } catch(e) { 
                 console.error(e);
-                showToast('Error al guardar item', 'error'); 
+                showToast('Error al guardar item: ' + e.message, 'error'); 
             } 
         };
+
 
 
         window.deleteInventoryItem = async (id) => { 
@@ -1766,15 +1780,20 @@
                     t.update(wRef, { balance: (currentBalance - cost) });
                     
                     // --- MODIFICACION: SOLO DESCONTAR STOCK SI NO ES LIBRO ---
-                                        // --- MODIFICACION: CATEGORÍAS CON STOCK INFINITO ---
-// Agrega aquí todas las categorías que NO deben bajar de stock
-const infiniteCategories = ['libros', 'documentos', 'herramientas', 'cursos']; 
+                                        // --- MODIFICACION: SOLO DESCONTAR STOCK SI NO ES LIBRO NI DOCUMENTO ---
+                                        // --- LÓGICA DE STOCK INFINITO ---
+                    // Lista de categorías que NUNCA se agotan ni se marcan como vendidas
+                    const infiniteCategories = ['libros', 'documentos', 'herramientas', 'cursos'];
 
-if (!infiniteCategories.includes(productData.category)) {
-    // SI NO ES INFINITO: Marcar item como vendido y restar stock
-    t.update(doc(db, 'artifacts', appId, 'public', 'data', 'inventory_items', itemId), { status: 'sold', soldTo: currentUser.uid, soldAt: serverTimestamp() });
-    t.update(pRef, { stock: (productData.stock || 0) - 1 });
-}
+                    if (!infiniteCategories.includes(productData.category)) {
+                        // SI NO ES INFINITO (Ej: Netflix):
+                        // 1. Marcar el item específico como "Vendido" para que nadie más lo tome
+                        t.update(doc(db, 'artifacts', appId, 'public', 'data', 'inventory_items', itemId), { status: 'sold', soldTo: currentUser.uid, soldAt: serverTimestamp() });
+                        
+                        // 2. Restar 1 al stock visible del producto
+                        t.update(pRef, { stock: (productData.stock || 0) - 1 });
+                    }
+                    // Si ES infinito (Herramientas), no hacemos nada aquí, el item sigue "available"
 
 
                     // ---------------------------------------------------------
