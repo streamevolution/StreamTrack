@@ -1091,9 +1091,8 @@
             fieldsBook.classList.add('hidden');
             fieldsDates.classList.remove('hidden');
 
-            // --- CAMBIO AQUÍ: Agregamos || category === 'documentos' ---
+                        // --- MODIFICADO: Agregamos || category === 'herramientas' ---
             if (category === 'libros' || category === 'documentos' || category === 'herramientas') {
-
                 document.getElementById('inv-email').parentNode.classList.add('hidden'); // Ocultar email
                 fieldsBook.classList.remove('hidden'); // Mostrar Link
                 fieldsDates.classList.add('hidden'); // Ocultar Fechas
@@ -1128,9 +1127,8 @@
                     status: 'available'
                 };
 
-                // --- CAMBIO AQUÍ: Agregamos || category === 'documentos' ---
+                                // --- MODIFICADO: Agregamos || category === 'herramientas' ---
                 if (category === 'libros' || category === 'documentos' || category === 'herramientas') {
-                
                     itemData.link = document.getElementById('inv-link').value;
                     itemData.password = document.getElementById('inv-pass').value; 
                     if(!itemData.link) return showToast('El link es obligatorio', 'error');
